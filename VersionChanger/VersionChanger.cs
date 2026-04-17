@@ -116,7 +116,7 @@ namespace DSoft.VersionChanger
                 VsShellUtilities.ShowMessageBox(
                 this.package,
                 ex.Message,
-                "DSoft - Version Changer",
+                "Version Changer 2026 (Aldelís Fork)",
                 OLEMSGICON.OLEMSGICON_INFO,
                 OLEMSGBUTTON.OLEMSGBUTTON_OK,
                 OLEMSGDEFBUTTON.OLEMSGDEFBUTTON_FIRST);

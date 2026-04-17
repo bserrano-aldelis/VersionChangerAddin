@@ -90,7 +90,7 @@ namespace DSoft.VersionChanger.Views
                     }
                     catch (Exception ex)
                     {
-                        MessageBox.Show(ex.Message, "Version Changer");
+                        MessageBox.Show(ex.Message, "Version Changer 2026 (Aldelís Fork)");
                     }
 
                 });

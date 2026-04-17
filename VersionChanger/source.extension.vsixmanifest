@@ -1,30 +1,30 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
     <Metadata>
-        <Identity Id="VersionChanger2022.315c8ff9-932e-4b23-b9d8-0fcd23bdb0be" Version="4.1.3" Language="en-US" Publisher="Newky2k" />
-        <DisplayName>Version Changer 2022</DisplayName>
-        <Description xml:space="preserve">Visual Studio 2022 extension that allows you to change the version numbers in all projects in a solution in a easy to use interface.</Description>
+        <Identity Id="VersionChanger2026Aldelis.315c8ff9-932e-4b23-b9d8-0fcd23bdb0be" Version="4.8.0" Language="en-US" Publisher="Aldelís Fork" />
+        <DisplayName>Version Changer 2026 (Aldelís Fork)</DisplayName>
+        <Description xml:space="preserve">Visual Studio 2026 extension that allows you to change the version numbers in all projects in a solution in an easy to use interface.</Description>
         <MoreInfo>https://marketplace.visualstudio.com/items?itemName=Newky2k.VersionChanger2022</MoreInfo>
         <ReleaseNotes>Changes.txt</ReleaseNotes>
         <Icon>Resources\Package.ico</Icon>
     </Metadata>
     <Installation>
-        <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 18.0)">
+        <InstallationTarget Id="Microsoft.VisualStudio.Community" Version="[17.0, 19.0)">
             <ProductArchitecture>amd64</ProductArchitecture>
         </InstallationTarget>
-        <InstallationTarget Id="Microsoft.VisualStudio.Pro" Version="[17.0, 18.0)">
+        <InstallationTarget Id="Microsoft.VisualStudio.Pro" Version="[17.0, 19.0)">
             <ProductArchitecture>amd64</ProductArchitecture>
         </InstallationTarget>
-        <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 18.0)">
+        <InstallationTarget Id="Microsoft.VisualStudio.Enterprise" Version="[17.0, 19.0)">
             <ProductArchitecture>amd64</ProductArchitecture>
         </InstallationTarget>
-        <InstallationTarget Version="[17.0, 18.0)" Id="Microsoft.VisualStudio.Community">
+        <InstallationTarget Version="[17.0, 19.0)" Id="Microsoft.VisualStudio.Community">
             <ProductArchitecture>arm64</ProductArchitecture>
         </InstallationTarget>
-        <InstallationTarget Version="[17.0, 18.0)" Id="Microsoft.VisualStudio.Pro">
+        <InstallationTarget Version="[17.0, 19.0)" Id="Microsoft.VisualStudio.Pro">
             <ProductArchitecture>arm64</ProductArchitecture>
         </InstallationTarget>
-        <InstallationTarget Version="[17.0, 18.0)" Id="Microsoft.VisualStudio.Enterprise">
+        <InstallationTarget Version="[17.0, 19.0)" Id="Microsoft.VisualStudio.Enterprise">
             <ProductArchitecture>arm64</ProductArchitecture>
         </InstallationTarget>
     </Installation>
