@@ -98,7 +98,7 @@ namespace DSoft.VersionChanger.Controls
         }
 
         public static void SetBooleanValue(bool value, string key)
-        {         
+        {
             SettingsStore.SetBoolean("Version Options", key, value);
         }
 
@@ -107,6 +107,25 @@ namespace DSoft.VersionChanger.Controls
             SettingsStore.SetMemoryStream("Version Options", key, value);
         }
 
+        public static int GetIntegerValue(string key, int defaultValue = 0)
+        {
+            var returnVal = defaultValue;
 
+            try
+            {
+                returnVal = SettingsStore.GetInt32("Version Options", key);
+            }
+            catch
+            {
+                SetIntegerValue(returnVal, key);
+            }
+
+            return returnVal;
+        }
+
+        public static void SetIntegerValue(int value, string key)
+        {
+            SettingsStore.SetInt32("Version Options", key, value);
+        }
     }
 }

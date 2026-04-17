@@ -1,5 +1,6 @@
 ﻿using DSoft.VersionChanger.Controls;
 using DSoft.VersionChanger.Data;
+using DSoft.VersionChanger.Enums;
 using DSoft.VersionChanger.Extensions;
 using EnvDTE;
 using Microsoft.VisualStudio.Shell;
@@ -56,6 +57,10 @@ namespace DSoft.VersionChanger.ViewModel
         private string _workingText = "Loading...";
         private bool _disableSelectionStorage;
         private bool _assemblyFileInfo_AddSuffix;
+
+        private PreReleaseType _preReleaseType = PreReleaseType.Final;
+        private string _preReleaseIteration;
+        private string _preReleaseCustom;
         #endregion
 
         public event EventHandler LoadingProgressUpdated = delegate { };
@@ -100,7 +105,7 @@ namespace DSoft.VersionChanger.ViewModel
         public string AssemblyMajor
         {
             get { return _assemblyMajor; }
-            set { _assemblyMajor = (string.IsNullOrWhiteSpace(value)) ? "0" : value; PropertyDidChange(nameof(AssemblyMajor)); RecalculateVersion(); RecalculateVersion(); }
+            set { _assemblyMajor = (string.IsNullOrWhiteSpace(value)) ? "0" : value; PropertyDidChange(nameof(AssemblyMajor)); RecalculateVersion(); }
         }
 
         public string AssemblyFileMinor
@@ -300,6 +305,7 @@ namespace DSoft.VersionChanger.ViewModel
                 PropertyDidChange("ShowSemVer");
                 PropertyDidChange("EnableRevisionEnabled");
                 PropertyDidChange("AssemblyFileInfo_AddSuffix");
+                PropertyDidChange(nameof(VersionPreview));
             }
         }
 
@@ -396,10 +402,128 @@ namespace DSoft.VersionChanger.ViewModel
             set { androidBuild = value; PropertyDidChange("AndroidBuild"); }
         }
 
+        /// <summary>
+        /// SemVer pre-release suffix actually applied to the version. Composed from
+        /// <see cref="PreReleaseType"/> + <see cref="PreReleaseIteration"/>, or the
+        /// user-supplied <see cref="PreReleaseCustom"/> value when the type is Custom.
+        /// Empty when the type is Final.
+        /// </summary>
         public string PreRelase
         {
             get { return preRelease; }
-            set { preRelease = value; PropertyDidChange("PreRelase"); }
+            set { preRelease = value; PropertyDidChange(nameof(PreRelase)); }
+        }
+
+        /// <summary>
+        /// Presets exposed to the ComboBox so users can pick Alpha/Beta/RC/Final in one click
+        /// instead of hand-typing a SemVer pre-release identifier.
+        /// </summary>
+        public IEnumerable<PreReleaseType> PreReleaseTypes => (PreReleaseType[])System.Enum.GetValues(typeof(PreReleaseType));
+
+        public PreReleaseType PreReleaseType
+        {
+            get { return _preReleaseType; }
+            set
+            {
+                if (_preReleaseType == value)
+                    return;
+
+                _preReleaseType = value;
+                SettingsControl.SetIntegerValue((int)value, nameof(PreReleaseType));
+
+                //picking any pre-release only makes sense under SemVer — flip it on automatically
+                if (value != PreReleaseType.Final && !ForceSemVer)
+                    ForceSemVer = true;
+
+                RecomposePreRelease();
+
+                PropertyDidChange(nameof(PreReleaseType));
+                PropertyDidChange(nameof(ShowPreReleaseIteration));
+                PropertyDidChange(nameof(ShowPreReleaseCustom));
+            }
+        }
+
+        public string PreReleaseIteration
+        {
+            get { return _preReleaseIteration; }
+            set
+            {
+                _preReleaseIteration = value;
+                RecomposePreRelease();
+                PropertyDidChange(nameof(PreReleaseIteration));
+            }
+        }
+
+        public string PreReleaseCustom
+        {
+            get { return _preReleaseCustom; }
+            set
+            {
+                _preReleaseCustom = value;
+                if (_preReleaseType == PreReleaseType.Custom)
+                    RecomposePreRelease();
+                PropertyDidChange(nameof(PreReleaseCustom));
+            }
+        }
+
+        public bool ShowPreReleaseIteration => _preReleaseType == PreReleaseType.Alpha
+                                                || _preReleaseType == PreReleaseType.Beta
+                                                || _preReleaseType == PreReleaseType.RC;
+
+        public bool ShowPreReleaseCustom => _preReleaseType == PreReleaseType.Custom;
+
+        /// <summary>
+        /// Live preview of the version string users will see applied to their projects.
+        /// Uses 3-part + suffix under SemVer, otherwise the full 4-part assembly version.
+        /// </summary>
+        public string VersionPreview
+        {
+            get
+            {
+                var major = string.IsNullOrEmpty(_assemblyMajor) ? "0" : _assemblyMajor;
+                var minor = string.IsNullOrEmpty(_assemblyMinor) ? "0" : _assemblyMinor;
+                var build = string.IsNullOrEmpty(_assemblyBuild) ? "0" : _assemblyBuild;
+
+                if (_forceSemVer)
+                {
+                    var core = $"{major}.{minor}.{build}";
+                    return string.IsNullOrEmpty(preRelease) ? core : $"{core}-{preRelease}";
+                }
+
+                if (_versionOptions.EnableRevision)
+                {
+                    var rev = string.IsNullOrEmpty(_assemblyRevision) ? "0" : _assemblyRevision;
+                    return $"{major}.{minor}.{build}.{rev}";
+                }
+
+                return $"{major}.{minor}.{build}";
+            }
+        }
+
+        private void RecomposePreRelease()
+        {
+            string suffix;
+
+            switch (_preReleaseType)
+            {
+                case PreReleaseType.Final:
+                    suffix = string.Empty;
+                    break;
+                case PreReleaseType.Custom:
+                    suffix = _preReleaseCustom ?? string.Empty;
+                    break;
+                default:
+                    {
+                        var label = _preReleaseType.ToString().ToLowerInvariant();
+                        //trim leading zeros / whitespace but allow empty — "beta" alone is valid
+                        var iter = (_preReleaseIteration ?? string.Empty).Trim();
+                        suffix = string.IsNullOrEmpty(iter) ? label : $"{label}.{iter}";
+                    }
+                    break;
+            }
+
+            PreRelase = suffix;
+            PropertyDidChange(nameof(VersionPreview));
         }
 
         public bool UpdateNuget
@@ -513,6 +637,7 @@ namespace DSoft.VersionChanger.ViewModel
                 _versionOptions.EnableRevision = value;
                 SettingsControl.SetBooleanValue(value, "EnableRevision");
                 PropertyDidChange("EnableRevision");
+                PropertyDidChange(nameof(VersionPreview));
             }
         }
 
@@ -638,6 +763,16 @@ namespace DSoft.VersionChanger.ViewModel
             _versionOptions.UpdateAppDisplayVersion = SettingsControl.GetBooleanValue("UpdateAppDisplayVersion", true);
             _versionOptions.UpdateAppVersion = SettingsControl.GetBooleanValue("UpdateAppVersion", true);
 
+            _preReleaseType = (PreReleaseType)SettingsControl.GetIntegerValue(nameof(PreReleaseType), (int)PreReleaseType.Final);
+
+            //a saved non-Final preset requires SemVer to actually take effect on the next run
+            if (_preReleaseType != PreReleaseType.Final && !_forceSemVer)
+            {
+                _forceSemVer = true;
+                _versionOptions.EnableRevision = false;
+            }
+
+            RecomposePreRelease();
         }
 
 		#endregion
@@ -965,6 +1100,7 @@ namespace DSoft.VersionChanger.ViewModel
         private void RecalculateVersion()
         {
             AssemblyVersion = $"{AssemblyMajor}.{AssemblyMinor}.{AssemblyBuild}.{AssesmblyRevision}";
+            PropertyDidChange(nameof(VersionPreview));
         }
 
         private void RecalculateFileVersion()

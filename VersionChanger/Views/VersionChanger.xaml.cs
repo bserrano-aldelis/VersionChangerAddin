@@ -36,6 +36,7 @@ namespace DSoft.VersionChanger.Views
             this.DataContext = _viewModel;
 
 			_viewModel.LoadingProgressUpdated += MViewModel_LoadingProgressUpdated;
+            _viewModel.PropertyChanged += OnViewModelPropertyChanged;
 
             OnUseSemVerChecked(this, null);
             OnUseSeperateVersionsChanged(this, null);
@@ -154,6 +155,16 @@ namespace DSoft.VersionChanger.Views
         private void OnUseSemVerChecked(object sender, RoutedEventArgs e)
         {
             hdrVersionSuffix.Visibility = _viewModel.ShowSemVer ? Visibility.Visible : Visibility.Hidden;
+        }
+
+        //Picking a pre-release preset auto-enables SemVer in the view-model. Without this hook the
+        //VersionSuffix grid column would only reflect the change when the user toggled the checkbox.
+        private void OnViewModelPropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(ProjectViewModel.ForceSemVer) || e.PropertyName == nameof(ProjectViewModel.ShowSemVer))
+            {
+                hdrVersionSuffix.Visibility = _viewModel.ShowSemVer ? Visibility.Visible : Visibility.Hidden;
+            }
         }
 
 		private void OnClickLogo(object sender, RoutedEventArgs e)

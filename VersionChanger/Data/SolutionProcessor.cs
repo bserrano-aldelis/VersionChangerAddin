@@ -185,180 +185,90 @@ namespace DSoft.VersionChanger.Data
         }
 
         /// <summary>
-        /// Update an SDK style csproj
+        /// Update an SDK style csproj.
+        /// All version tags are rewritten directly in the project XML — relying on
+        /// <c>realProject.Properties</c> is unreliable for SDK-style projects because
+        /// many version properties are calculated/read-only through DTE and silently
+        /// discard assignments, leaving AssemblyVersion/FileVersion/Version untouched.
         /// </summary>
-        /// <param name="realProject"></param>
-        /// <param name="newVersion"></param>
-        /// <param name="fileVersion"></param>
-        /// <param name="versionSuffix"></param>
         public void UpdateSdkProject(Project realProject, AssemblyVersionOptions versionOptions, Version newVersion, Version fileVersion = null, string versionSuffix = null)
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            foreach (Property aProp in realProject.Properties)
-            {
-                var lowerCase = aProp.Name.ToLower();
-
-                if (lowerCase.Equals("assemblyversion") && versionOptions.UpdateAssemblyVersion == true)
-                {
-                    aProp.Value = versionOptions.GetVersionString(newVersion);
-                }
-                else if (lowerCase.Equals("versionprefix") && versionOptions.UpdateAssemblyVersionPrefix == true)
-                {
-                    aProp.Value = versionOptions.GetVersionString(newVersion);
-                }
-                else if (lowerCase.Equals("fileversion") && versionOptions.UpdateFileVersion == true)
-                {
-                    var fVersion = (fileVersion == null) ? newVersion : fileVersion;
-
-                    aProp.Value = versionOptions.GetVersionString(fVersion);
-                }
-                else if (lowerCase.Equals("version") && versionOptions.UpdateVersion == true)
-                {
-                    var str = versionOptions.CalculateVersion(newVersion, versionSuffix);
-
-                    aProp.Value = str;
-
-                }
-                else if (lowerCase.Equals("versionsuffix") && !string.IsNullOrWhiteSpace(versionSuffix))
-                {
-                    aProp.Value = versionSuffix;
-                }
-                else if (lowerCase.Equals("packageversion", StringComparison.OrdinalIgnoreCase) && versionOptions.UpdatePackageVersion == true)
-                {
-                    var str = versionOptions.CalculateVersion(newVersion, versionSuffix);
-
-                    aProp.Value = str;
-
-                }
-                else if (lowerCase.Equals("assemblyinformationalversion") || aProp.Name.ToLower().Equals("informationalversion") && versionOptions.UpdateInformationalVersion == true)
-                {
-                    var str = versionOptions.CalculateVersion(newVersion, versionSuffix);
-
-                    aProp.Value = str;
-
-                }
-            }
-
+            //flush any pending in-memory edits so we don't fight VS when rewriting from disk
             realProject.Save();
 
+            var effectiveFileVersion = fileVersion ?? newVersion;
+            var assemblyVersionStr = versionOptions.GetVersionString(newVersion);
+            var fileVersionStr = versionOptions.GetVersionString(effectiveFileVersion);
+            var fullSemVer = versionOptions.CalculateVersion(newVersion, versionSuffix);
+            var baseSemVer = versionOptions.CalculateVersion(newVersion);
 
-            //Update some properties via the xml, such as InformationalVersion
-            var txt = File.ReadAllLines(realProject.FileName);
-            var searchableText = string.Join("", txt);
+            var lines = File.ReadAllLines(realProject.FileName);
+            var changed = false;
 
-            var infoVersion = "InformationalVersion";
-            var packVer = "PackageVersion";
-            var mauiDisplayVersion = "ApplicationDisplayVersion";
-            var mauiAppVersionStr = "ApplicationVersion";
-            var verPrefix = "VersionPrefix";
-
-            var outPutLines = new List<string>();
-
-            //update informational version and package version
-            if (searchableText.Contains(infoVersion) || searchableText.Contains(packVer) || searchableText.Contains(mauiDisplayVersion) || searchableText.Contains(mauiAppVersionStr) || searchableText.Contains(verPrefix))
+            for (int i = 0; i < lines.Length; i++)
             {
-                foreach (var aLine in txt)
+                var line = lines[i];
+
+                if (versionOptions.UpdateAssemblyVersion)
+                    changed |= TryReplaceXmlTag(ref line, "AssemblyVersion", assemblyVersionStr);
+
+                if (versionOptions.UpdateFileVersion)
+                    changed |= TryReplaceXmlTag(ref line, "FileVersion", fileVersionStr);
+
+                if (versionOptions.UpdateAssemblyVersionPrefix)
+                    changed |= TryReplaceXmlTag(ref line, "VersionPrefix", assemblyVersionStr);
+
+                if (versionOptions.UpdateVersion)
+                    changed |= TryReplaceXmlTag(ref line, "Version", fullSemVer);
+
+                if (versionOptions.UpdatePackageVersion)
+                    changed |= TryReplaceXmlTag(ref line, "PackageVersion", fullSemVer);
+
+                if (versionOptions.UpdateInformationalVersion)
                 {
-                    if (aLine.Contains($"<{infoVersion}>") && versionOptions.UpdateInformationalVersion == true)
-                    {
-                        var newLine = aLine;
+                    changed |= TryReplaceXmlTag(ref line, "InformationalVersion", fullSemVer);
+                    changed |= TryReplaceXmlTag(ref line, "AssemblyInformationalVersion", fullSemVer);
+                }
 
-                        var pos = newLine.IndexOf($"<{infoVersion}>");
-                        var closer = newLine.IndexOf($"</{infoVersion}>");
+                if (!string.IsNullOrEmpty(versionSuffix))
+                    changed |= TryReplaceXmlTag(ref line, "VersionSuffix", versionSuffix);
 
-                        if (pos != -1 && closer != -1)
-                        {
-                            newLine = newLine.Substring(0, pos + (infoVersion.Length + 2));
+                if (versionOptions.UpdateAppDisplayVersion)
+                    changed |= TryReplaceXmlTag(ref line, "ApplicationDisplayVersion", baseSemVer);
 
-                            newLine += versionOptions.CalculateVersion(newVersion, versionSuffix);
+                if (versionOptions.UpdateAppVersion)
+                    changed |= TryReplaceXmlTag(ref line, "ApplicationVersion", newVersion.Major.ToString());
 
-                            newLine += $"</{infoVersion}>";
-
-                            outPutLines.Add(newLine);
-                        }
-                    }
-                    else if (aLine.Contains($"<{packVer}>") && versionOptions.UpdatePackageVersion == true)
-                    {
-                        var newLine = aLine;
-
-                        var pos = newLine.IndexOf($"<{packVer}>");
-                        var closer = newLine.IndexOf($"</{packVer}>");
-
-                        if (pos != -1 && closer != -1)
-                        {
-                            newLine = newLine.Substring(0, pos + (packVer.Length + 2));
-
-                            newLine += versionOptions.CalculateVersion(newVersion, versionSuffix);
-
-                            newLine += $"</{packVer}>";
-
-                            outPutLines.Add(newLine);
-                        }
-                    }
-                    else if (aLine.Contains($"<{mauiDisplayVersion}>") && versionOptions.UpdateAppDisplayVersion == true)
-                    {
-                        var newLine = aLine;
-
-                        var pos = newLine.IndexOf($"<{mauiDisplayVersion}>");
-                        var closer = newLine.IndexOf($"</{mauiDisplayVersion}>");
-
-                        if (pos != -1 && closer != -1)
-                        {
-                            newLine = newLine.Substring(0, pos + (mauiDisplayVersion.Length + 2));
-
-                            newLine += versionOptions.CalculateVersion(newVersion);
-
-                            newLine += $"</{mauiDisplayVersion}>";
-
-                            outPutLines.Add(newLine);
-                        }
-                    }
-                    else if (aLine.Contains($"<{mauiAppVersionStr}>") && versionOptions.UpdateAppDisplayVersion == true)
-                    {
-                        var newLine = aLine;
-
-                        var pos = newLine.IndexOf($"<{mauiAppVersionStr}>");
-                        var closer = newLine.IndexOf($"</{mauiAppVersionStr}>");
-
-                        if (pos != -1 && closer != -1)
-                        {
-                            newLine = newLine.Substring(0, pos + (mauiAppVersionStr.Length + 2));
-
-                            newLine += newVersion.Major.ToString();
-
-                            newLine += $"</{mauiAppVersionStr}>";
-
-                            outPutLines.Add(newLine);
-                        }
-                    }
-                    else if (aLine.Contains($"<{verPrefix}>") && versionOptions.UpdateAssemblyVersionPrefix == true)
-                    {
-                        var newLine = aLine;
-
-                        var pos = newLine.IndexOf($"<{verPrefix}>");
-                        var closer = newLine.IndexOf($"</{verPrefix}>");
-
-                        if (pos != -1 && closer != -1)
-                        {
-                            newLine = newLine.Substring(0, pos + (verPrefix.Length + 2));
-
-                            newLine += versionOptions.CalculateVersion(newVersion);
-
-                            newLine += $"</{verPrefix}>";
-
-                            outPutLines.Add(newLine);
-                        }
-                    }
-                    else
-                    {
-                        outPutLines.Add(aLine);
-                    }
-                }  
+                lines[i] = line;
             }
 
-            if (outPutLines.Count > 0) //only write if changes occured
-                File.WriteAllLines(realProject.FileName, outPutLines);
+            if (changed)
+                File.WriteAllLines(realProject.FileName, lines);
+        }
+
+        /// <summary>
+        /// Replace the inner text of the first occurrence of <c>&lt;tag&gt;…&lt;/tag&gt;</c>
+        /// on the given line. Supports optional attributes on the opening tag.
+        /// Returns true when the line was actually modified.
+        /// </summary>
+        private static bool TryReplaceXmlTag(ref string line, string tag, string newValue)
+        {
+            //match <Tag> or <Tag attr="..."> … </Tag> on a single line
+            var pattern = $@"<{Regex.Escape(tag)}(?<attrs>(\s[^>/]*)?)>(?<value>[^<]*)</{Regex.Escape(tag)}>";
+            var match = Regex.Match(line, pattern);
+
+            if (!match.Success)
+                return false;
+
+            if (match.Groups["value"].Value == newValue)
+                return false;
+
+            var attrs = match.Groups["attrs"].Value;
+            var replacement = $"<{tag}{attrs}>{newValue}</{tag}>";
+            line = line.Substring(0, match.Index) + replacement + line.Substring(match.Index + match.Length);
+            return true;
         }
 
         /// <summary>

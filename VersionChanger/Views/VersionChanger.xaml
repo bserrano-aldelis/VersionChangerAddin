@@ -200,17 +200,48 @@
                                            Visibility="{Binding EnableRevision, Converter={StaticResource booleanToVisibilityConverter}}"
                                             data:Masking.Mask="^[0-9][\d]*(,\d+)?$"  />
                                     </StackPanel>
-                                    <Grid VerticalAlignment="Center" x:Name="secPre" Visibility="{Binding ShowSemVer, Converter={StaticResource booleanToVisibilityConverter}}">
+                                    <Grid VerticalAlignment="Center" x:Name="secPre">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="0,5,5,0" Width="125" ToolTip="Pre-release label, alphanumberic (+ hyphen) string i.e for beta1 you get 1.0.0-beta1" >Version Suffix (optional)</TextBlock>
-                                        <TextBox  Grid.Column="1"
-                                Text="{Binding PreRelase}" 
-                                Margin="0,5,5,0" 
-                                TextAlignment="Right" 
-                                data:Masking.Mask="^[0-9A-Za-z-]*$"  />
+                                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="0,5,5,0" Width="125"
+                                                   ToolTip="Release type: Final has no suffix; Alpha/Beta/RC produce '-alpha', '-beta.N', '-rc.N'. Custom lets you type any SemVer pre-release identifier.">Release Type</TextBlock>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                                            <ComboBox ItemsSource="{Binding PreReleaseTypes}"
+                                                      SelectedItem="{Binding PreReleaseType}"
+                                                      Width="90"
+                                                      Margin="0,5,5,0"
+                                                      ToolTip="Pick a SemVer pre-release preset. Selecting a non-Final preset turns on SemVer 2.0 automatically." />
+                                            <TextBox Text="{Binding PreReleaseIteration, UpdateSourceTrigger=PropertyChanged}"
+                                                     Width="50"
+                                                     Margin="0,5,5,0"
+                                                     TextAlignment="Right"
+                                                     ToolTip="Optional iteration number, e.g. 2 → alpha.2"
+                                                     Visibility="{Binding ShowPreReleaseIteration, Converter={StaticResource booleanToVisibilityConverter}}"
+                                                     data:Masking.Mask="^[0-9]*$" />
+                                            <TextBox Text="{Binding PreReleaseCustom, UpdateSourceTrigger=PropertyChanged}"
+                                                     Width="150"
+                                                     Margin="0,5,5,0"
+                                                     TextAlignment="Right"
+                                                     ToolTip="Custom SemVer pre-release identifier. Allowed: letters, digits, dots and hyphens."
+                                                     Visibility="{Binding ShowPreReleaseCustom, Converter={StaticResource booleanToVisibilityConverter}}"
+                                                     data:Masking.Mask="^[0-9A-Za-z\.\-]*$" />
+                                        </StackPanel>
+                                    </Grid>
+                                    <Grid VerticalAlignment="Center">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="0,5,5,0" Width="125" Opacity="0.7">Preview</TextBlock>
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding VersionPreview}"
+                                                   VerticalAlignment="Center"
+                                                   HorizontalAlignment="Right"
+                                                   Margin="0,5,5,0"
+                                                   FontWeight="Bold"
+                                                   Opacity="0.85" />
                                     </Grid>
                                     <Grid VerticalAlignment="Center" x:Name="secIos" Visibility="{Binding ShowIos, Converter={StaticResource booleanToVisibilityConverter}}">
                                         <Grid.ColumnDefinitions>
