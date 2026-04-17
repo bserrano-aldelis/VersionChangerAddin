@@ -140,15 +140,27 @@ namespace DSoft.VersionChanger.Data
 
                             if (projectItem == null)
                             {
-                                var newFailedProject = new FailedProject()
+                                // Before failing, check whether the .csproj is actually SDK-style.
+                                // This happens when a project was migrated to SDK format but the .sln
+                                // still carries the legacy C# project type GUID {FAE04EC0-...}, causing
+                                // GetProjectTypeGuids() to return non-null even though there is no
+                                // AssemblyInfo.cs — version properties live in the .csproj itself.
+                                if (IsSdkStyleProjectFile(proj.FileName))
                                 {
-                                    Name = proj.Name,
-                                    Reason = Enum.FailureReason.MissingAssemblyInfo,
-                                };
+                                    isSdk = true;
+                                }
+                                else
+                                {
+                                    var newFailedProject = new FailedProject()
+                                    {
+                                        Name = proj.Name,
+                                        Reason = Enum.FailureReason.MissingAssemblyInfo,
+                                    };
 
-                                FailedProjects.Add(newFailedProject);
+                                    FailedProjects.Add(newFailedProject);
 
-                                continue;
+                                    continue;
+                                }
                             }
 
                         }
@@ -899,37 +911,45 @@ namespace DSoft.VersionChanger.Data
             }
 
 
-            //Update some properties via the xml, such as InformationalVersion
+            // Read properties that DTE doesn't expose reliably for SDK-style projects
+            // directly from the .csproj XML.
             var txt = File.ReadAllLines(project.FileName);
-            var searchableText = string.Join("", txt);
 
-            var infoVersion = "InformationalVersion";
-            var verPrefix = "VersionPrefix";
-            var mauiDisplayVersion = "ApplicationDisplayVersion";
-            var mauiAppVersionStr = "ApplicationVersion";
-
-            //update informational version and package version
-            if (searchableText.Contains(infoVersion) || searchableText.Contains(verPrefix) || searchableText.Contains(mauiDisplayVersion) || searchableText.Contains(mauiAppVersionStr))
+            foreach (var aLine in txt)
             {
-                foreach (var aLine in txt)
-                {
-                    if (aLine.Contains($"<{infoVersion}>"))
-                    {
-                        informationVersion = aLine.ValueForNode(infoVersion);
-                    }
-                    else if (aLine.Contains($"<{verPrefix}>"))
-                    {
-                        versionPrefix = aLine.ValueForNode(verPrefix);
-                    }
-                    else if (aLine.Contains($"<{mauiDisplayVersion}>"))
-                    {
-                        mauiAppDisplayVersion = aLine.ValueForNode(mauiDisplayVersion);
-                    }
-                    else if (aLine.Contains($"<{mauiAppVersionStr}>"))
-                    {
-                        mauiAppVersion = aLine.ValueForNode(mauiAppVersionStr);
-                    }
+                if (aLine.Contains("<InformationalVersion>"))
+                    informationVersion = aLine.ValueForNode("InformationalVersion");
+                else if (aLine.Contains("<VersionPrefix>"))
+                    versionPrefix = aLine.ValueForNode("VersionPrefix");
+                else if (aLine.Contains("<ApplicationDisplayVersion>"))
+                    mauiAppDisplayVersion = aLine.ValueForNode("ApplicationDisplayVersion");
+                else if (aLine.Contains("<ApplicationVersion>"))
+                    mauiAppVersion = aLine.ValueForNode("ApplicationVersion");
+                else if (aLine.Contains("<VersionSuffix>") && string.IsNullOrEmpty(versionSuffix))
+                    versionSuffix = aLine.ValueForNode("VersionSuffix");
+                else if (aLine.Contains("<AssemblyVersion>") && string.IsNullOrEmpty(assemblyVersion))
+                    assemblyVersion = aLine.ValueForNode("AssemblyVersion");
+                else if (aLine.Contains("<FileVersion>") && string.IsNullOrEmpty(fileVersion))
+                    fileVersion = aLine.ValueForNode("FileVersion");
+                else if (aLine.Contains("<Version>") && string.IsNullOrEmpty(version))
+                    version = aLine.ValueForNode("Version");
+                else if (aLine.Contains("<PackageVersion>") && string.IsNullOrEmpty(packageVersion))
+                    packageVersion = aLine.ValueForNode("PackageVersion");
+            }
 
+            // Extract the pre-release suffix from whichever version field carries it,
+            // in priority order: explicit VersionSuffix → InformationalVersion → Version → PackageVersion.
+            if (string.IsNullOrEmpty(versionSuffix))
+            {
+                foreach (var candidate in new[] { informationVersion, version, packageVersion })
+                {
+                    if (string.IsNullOrEmpty(candidate)) continue;
+                    var dashPos = candidate.IndexOf('-');
+                    if (dashPos >= 0 && dashPos < candidate.Length - 1)
+                    {
+                        versionSuffix = candidate.Substring(dashPos + 1);
+                        break;
+                    }
                 }
             }
 
@@ -1029,6 +1049,37 @@ namespace DSoft.VersionChanger.Data
             }
 
             return newVersion;
+        }
+
+        /// <summary>
+        /// Returns true when the .csproj file uses the SDK-style format
+        /// (<c>&lt;Project Sdk="…"&gt;</c>). Used to handle projects that carry
+        /// a legacy project-type GUID in the .sln yet were migrated to SDK style.
+        /// </summary>
+        private static bool IsSdkStyleProjectFile(string projectFilePath)
+        {
+            if (string.IsNullOrEmpty(projectFilePath) || !File.Exists(projectFilePath))
+                return false;
+
+            foreach (var line in File.ReadLines(projectFilePath))
+            {
+                var trimmed = line.TrimStart();
+
+                if (trimmed.Length == 0)
+                    continue;
+
+                // SDK-style root element: <Project Sdk="Microsoft.NET.Sdk...">
+                if (trimmed.StartsWith("<Project", StringComparison.OrdinalIgnoreCase)
+                    && trimmed.IndexOf("Sdk=", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+
+                // Old-style root element: <Project ToolsVersion="…" xmlns="…">
+                // Once we hit the root tag we know enough — stop scanning.
+                if (trimmed.StartsWith("<Project", StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            return false;
         }
 
         #endregion
