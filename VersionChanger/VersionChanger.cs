@@ -1,15 +1,10 @@
-﻿using System;
-using System.ComponentModel.Design;
-using System.Globalization;
-using System.Threading;
-using System.Threading.Tasks;
-using System.Windows;
-using DSoft.VersionChanger.Controls;
+﻿using DSoft.VersionChanger.Controls;
 using EnvDTE;
-using MahApps.Metro;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Shell.Settings;
+using System;
+using System.ComponentModel.Design;
 using Task = System.Threading.Tasks.Task;
 
 namespace DSoft.VersionChanger
@@ -19,7 +14,7 @@ namespace DSoft.VersionChanger
     /// </summary>
     internal sealed class VersionChanger
     {
-    
+
         /// <summary>
         /// VS Package that provides this command, not null.
         /// </summary>
@@ -83,7 +78,7 @@ namespace DSoft.VersionChanger
             if (!SettingsControl.IsLoaded)
                 SettingsControl.SettingsManager = new ShellSettingsManager(package);
 
-            
+
         }
 
         /// <summary>
