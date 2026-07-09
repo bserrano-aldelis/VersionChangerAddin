@@ -1,5 +1,6 @@
 ﻿using DSoft.VersionChanger.Extensions;
 using EnvDTE;
+using Microsoft.VisualStudio;
 using Microsoft.VisualStudio.Shell;
 using Microsoft.VisualStudio.Shell.Flavor;
 using Microsoft.VisualStudio.Shell.Interop;
@@ -207,8 +208,30 @@ namespace DSoft.VersionChanger.Data
         {
             ThreadHelper.ThrowIfNotOnUIThread();
 
-            //flush any pending in-memory edits so we don't fight VS when rewriting from disk
-            realProject.Save();
+            // Resolve the real .csproj path through the VS hierarchy. EnvDTE.Project.FileName is
+            // unreliable for .slnx (XML) solutions — it can return an empty/synthetic path — so
+            // reading and (crucially) writing based on it silently targets the wrong file. The
+            // hierarchy path (IVsProject.GetMkDocument) is canonical for both .sln and .slnx.
+            var projectPath = GetProjectFilePath(realProject);
+
+#if DEBUG
+            var dteFileName = TryGet(() => realProject.FileName);
+            var dteFullName = TryGet(() => realProject.FullName);
+#endif
+
+            if (string.IsNullOrEmpty(projectPath))
+            {
+                //no resolvable path: never fail silently, report it back so the user gets feedback
+                FailedProjects.Add(new FailedProject { Name = realProject.Name });
+#if DEBUG
+                LogSlnxDiagnostics(realProject.Name, dteFileName, dteFullName, null, false, "path-unresolved");
+#endif
+                return;
+            }
+
+            //flush any pending in-memory edits so we don't fight VS when rewriting from disk.
+            //SDK/.slnx projects may not support the DTE Save(); that must never abort the update.
+            try { realProject.Save(); } catch { /* .slnx/SDK: ignore */ }
 
             var effectiveFileVersion = fileVersion ?? newVersion;
             var assemblyVersionStr = versionOptions.GetVersionString(newVersion);
@@ -216,7 +239,7 @@ namespace DSoft.VersionChanger.Data
             var fullSemVer = versionOptions.CalculateVersion(newVersion, versionSuffix);
             var baseSemVer = versionOptions.CalculateVersion(newVersion);
 
-            var lines = File.ReadAllLines(realProject.FileName);
+            var lines = File.ReadAllLines(projectPath);
             var changed = false;
 
             for (int i = 0; i < lines.Length; i++)
@@ -256,9 +279,224 @@ namespace DSoft.VersionChanger.Data
                 lines[i] = line;
             }
 
+            //A freshly-created SDK project may declare no version at all (it uses the implicit
+            //1.0.0), so the replace loop above finds nothing to change. Insert the enabled version
+            //tags so the update is not a silent no-op for those projects either.
+            var inserted = false;
+
+            if (!changed)
+            {
+                inserted = InsertMissingVersionTags(ref lines, versionOptions, assemblyVersionStr, fileVersionStr, fullSemVer);
+                changed = inserted;
+            }
+
             if (changed)
-                File.WriteAllLines(realProject.FileName, lines);
+            {
+                File.WriteAllLines(projectPath, lines);
+            }
+            else if (!HasAnyVersionTag(lines, versionOptions))
+            {
+                //nothing to replace and nothing could be inserted -> surface it instead of doing nothing
+                FailedProjects.Add(new FailedProject { Name = realProject.Name });
+            }
+
+#if DEBUG
+            LogSlnxDiagnostics(realProject.Name, dteFileName, dteFullName, projectPath, changed, inserted ? "inserted" : "replaced");
+#endif
         }
+
+        /// <summary>
+        /// Resolves the absolute path to a project's file (.csproj) using the Visual Studio
+        /// hierarchy, which is reliable for both classic .sln and the newer .slnx (XML) solutions.
+        /// Falls back to the EnvDTE values only if the hierarchy lookup fails. Returns null when no
+        /// existing path can be resolved — callers must handle that instead of failing silently.
+        /// </summary>
+        private string GetProjectFilePath(EnvDTE.Project project)
+        {
+            ThreadHelper.ThrowIfNotOnUIThread();
+
+            // 1) Canonical path from the hierarchy (works for .sln and .slnx)
+            try
+            {
+                var solution = (IVsSolution)GetService(project.DTE, typeof(SVsSolution));
+
+                if (solution != null
+                    && solution.GetProjectOfUniqueName(project.UniqueName, out var hierarchy) == VSConstants.S_OK
+                    && hierarchy is IVsProject vsProject
+                    && vsProject.GetMkDocument((uint)VSConstants.VSITEMID.Root, out var mkDocument) == VSConstants.S_OK
+                    && !string.IsNullOrEmpty(mkDocument)
+                    && File.Exists(mkDocument))
+                {
+                    return mkDocument;
+                }
+            }
+            catch
+            {
+                // fall through to the EnvDTE fallbacks
+            }
+
+            // 2) EnvDTE fallbacks
+            foreach (var candidate in new[] { TryGet(() => project.FullName), TryGet(() => project.FileName) })
+            {
+                if (!string.IsNullOrEmpty(candidate) && File.Exists(candidate))
+                    return candidate;
+            }
+
+            return null;
+        }
+
+        private static string TryGet(Func<string> getter)
+        {
+            try { return getter(); } catch { return null; }
+        }
+
+        /// <summary>
+        /// Inserts the enabled version tags (<c>Version</c>, <c>AssemblyVersion</c>, <c>FileVersion</c>)
+        /// into the first <c>&lt;PropertyGroup&gt;</c> when they are not already present. This makes the
+        /// update work for SDK-style projects that rely on the implicit 1.0.0 and declare no version at
+        /// all. Existing tags are never duplicated (those are handled by the replace pass). Tags are
+        /// written on a single line, as <see cref="TryReplaceXmlTag"/> expects on a later run. Returns
+        /// true when at least one tag was inserted.
+        /// </summary>
+        private static bool InsertMissingVersionTags(ref string[] lines, AssemblyVersionOptions versionOptions, string assemblyVersionStr, string fileVersionStr, string fullSemVer)
+        {
+            var toInsert = new List<KeyValuePair<string, string>>();
+
+            if (versionOptions.UpdateVersion && !HasTag(lines, "Version"))
+                toInsert.Add(new KeyValuePair<string, string>("Version", fullSemVer));
+
+            if (versionOptions.UpdateAssemblyVersion && !HasTag(lines, "AssemblyVersion"))
+                toInsert.Add(new KeyValuePair<string, string>("AssemblyVersion", assemblyVersionStr));
+
+            if (versionOptions.UpdateFileVersion && !HasTag(lines, "FileVersion"))
+                toInsert.Add(new KeyValuePair<string, string>("FileVersion", fileVersionStr));
+
+            if (toInsert.Count == 0)
+                return false;
+
+            //find the first real (non self-closing) <PropertyGroup ...> opening element
+            var propertyGroupLine = -1;
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var idx = lines[i].IndexOf("<PropertyGroup", StringComparison.OrdinalIgnoreCase);
+
+                if (idx >= 0 && lines[i].IndexOf("/>", idx, StringComparison.Ordinal) < 0)
+                {
+                    propertyGroupLine = i;
+                    break;
+                }
+            }
+
+            if (propertyGroupLine < 0)
+                return false; //no PropertyGroup to insert into — don't invent structure
+
+            var childIndent = GetPropertyGroupChildIndent(lines, propertyGroupLine);
+
+            var newLines = new List<string>(lines.Length + toInsert.Count);
+
+            for (int i = 0; i < lines.Length; i++)
+            {
+                newLines.Add(lines[i]);
+
+                if (i == propertyGroupLine)
+                {
+                    foreach (var tag in toInsert)
+                        newLines.Add($"{childIndent}<{tag.Key}>{tag.Value}</{tag.Key}>");
+                }
+            }
+
+            lines = newLines.ToArray();
+            return true;
+        }
+
+        /// <summary>
+        /// True when the given single-line XML tag (<c>&lt;tag&gt;</c>, with or without attributes)
+        /// already appears anywhere in the file. Exact tag match — e.g. "Version" does not match
+        /// "FileVersion", "PackageVersion" or "VersionPrefix".
+        /// </summary>
+        private static bool HasTag(string[] lines, string tag)
+        {
+            var opener = $"<{tag}>";
+            var openerWithAttrs = $"<{tag} ";
+
+            foreach (var line in lines)
+            {
+                if (line.IndexOf(opener, StringComparison.Ordinal) >= 0
+                    || line.IndexOf(openerWithAttrs, StringComparison.Ordinal) >= 0)
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// True when the file already declares at least one of the enabled version tags. Used to tell a
+        /// legitimate "version already at the requested value" no-op apart from a project that has no
+        /// place to write a version at all (only the latter is reported as a failure).
+        /// </summary>
+        private static bool HasAnyVersionTag(string[] lines, AssemblyVersionOptions versionOptions)
+        {
+            if (versionOptions.UpdateVersion && HasTag(lines, "Version")) return true;
+            if (versionOptions.UpdateAssemblyVersion && HasTag(lines, "AssemblyVersion")) return true;
+            if (versionOptions.UpdateFileVersion && HasTag(lines, "FileVersion")) return true;
+            if (versionOptions.UpdateAssemblyVersionPrefix && HasTag(lines, "VersionPrefix")) return true;
+            if (versionOptions.UpdatePackageVersion && HasTag(lines, "PackageVersion")) return true;
+            if (versionOptions.UpdateInformationalVersion
+                && (HasTag(lines, "InformationalVersion") || HasTag(lines, "AssemblyInformationalVersion"))) return true;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Works out the indentation for a new child element of the given PropertyGroup: it mirrors the
+        /// existing children's indentation, or falls back to the PropertyGroup's own indent plus two spaces.
+        /// </summary>
+        private static string GetPropertyGroupChildIndent(string[] lines, int propertyGroupLine)
+        {
+            //prefer to mirror the first existing child line's leading whitespace
+            for (int i = propertyGroupLine + 1; i < lines.Length; i++)
+            {
+                var line = lines[i];
+
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                if (line.TrimStart().StartsWith("</PropertyGroup", StringComparison.OrdinalIgnoreCase))
+                    break; //empty group, fall back below
+
+                return line.Substring(0, line.Length - line.TrimStart().Length);
+            }
+
+            //fall back to the PropertyGroup indent + 2 spaces
+            var pgLine = lines[propertyGroupLine];
+            var pgIndent = pgLine.Substring(0, pgLine.Length - pgLine.TrimStart().Length);
+            return pgIndent + "  ";
+        }
+
+#if DEBUG
+        /// <summary>
+        /// Debug-only diagnostics used to confirm how project paths resolve under .slnx vs .sln.
+        /// Writes one line per project to %TEMP%\VersionChanger_slnx_diag.log and to the debug output.
+        /// Compiled out of Release builds.
+        /// </summary>
+        private static void LogSlnxDiagnostics(string projectName, string dteFileName, string dteFullName, string resolvedPath, bool changed, string mode)
+        {
+            try
+            {
+                var message = $"[{DateTime.Now:HH:mm:ss}] {projectName} | DTE.FileName='{dteFileName}' | DTE.FullName='{dteFullName}' | resolved='{resolvedPath}' | changed={changed} | mode={mode}";
+
+                Debug.WriteLine("[VersionChanger] " + message);
+
+                var logPath = Path.Combine(Path.GetTempPath(), "VersionChanger_slnx_diag.log");
+                File.AppendAllText(logPath, message + Environment.NewLine);
+            }
+            catch
+            {
+                //diagnostics must never affect the update
+            }
+        }
+#endif
 
         /// <summary>
         /// Replace the inner text of the first occurrence of <c>&lt;tag&gt;…&lt;/tag&gt;</c>
@@ -911,11 +1149,20 @@ namespace DSoft.VersionChanger.Data
             }
 
 
-            // Read properties that DTE doesn't expose reliably for SDK-style projects
-            // directly from the .csproj XML.
-            var txt = File.ReadAllLines(project.FileName);
+            // Read properties that DTE doesn't expose reliably for SDK-style projects directly from
+            // the .csproj XML. Resolve the path via the VS hierarchy so this also works for .slnx
+            // solutions, where EnvDTE.Project.FileName is unreliable.
+            var projectFilePath = GetProjectFilePath(project);
 
-            foreach (var aLine in txt)
+            string[] txt = null;
+
+            if (!string.IsNullOrEmpty(projectFilePath))
+            {
+                try { txt = File.ReadAllLines(projectFilePath); }
+                catch { /* keep the DTE-sourced values; never break project loading */ }
+            }
+
+            foreach (var aLine in txt ?? new string[0])
             {
                 if (aLine.Contains("<InformationalVersion>"))
                     informationVersion = aLine.ValueForNode("InformationalVersion");
@@ -956,7 +1203,7 @@ namespace DSoft.VersionChanger.Data
             //is this using the new style csproj
             var newVersion = new ProjectVersion();
             newVersion.Name = project.Name;
-            newVersion.Path = project.FileName;
+            newVersion.Path = projectFilePath ?? project.FileName;
             newVersion.RealProject = project;
             newVersion.IsNewStyleProject = true;
             newVersion.ProjectType = "SDK";

@@ -1078,6 +1078,22 @@ namespace DSoft.VersionChanger.ViewModel
                             throw;
                         }
                     }
+
+                    //Surface any project that could not be updated (e.g. its path could not be
+                    //resolved, or an SDK/.slnx project with no writable version tag). Update-phase
+                    //failures are otherwise invisible: this SolutionProcessor's FailedProjects list
+                    //is never shown, unlike the one produced while loading.
+                    if (solutionProcessor.FailedProjects.Any())
+                    {
+                        var failedBuilder = new StringBuilder();
+                        failedBuilder.AppendLine("These projects could not be updated:");
+                        failedBuilder.AppendLine();
+
+                        foreach (var failed in solutionProcessor.FailedProjects)
+                            failedBuilder.AppendLine($"   • {failed.Name}");
+
+                        System.Windows.MessageBox.Show(failedBuilder.ToString(), "Version Changer 2026 (Aldelís Fork)");
+                    }
                 }
 
                 IsBusy = false;
